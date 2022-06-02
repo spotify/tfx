@@ -13,9 +13,10 @@
 # limitations under the License.
 """Utility functions for DSL Compiler."""
 
-from typing import List, Optional, Type
+from typing import List, Optional, Sequence, Tuple, Type, Union
 
 from tfx import types
+from tfx.dsl.compiler import constants
 from tfx.dsl.components.base import base_node
 from tfx.dsl.components.common import importer
 from tfx.dsl.components.common import resolver
@@ -57,6 +58,33 @@ def set_runtime_parameter_pb(
       pb.default_value.string_value = default_value
   else:
     raise ValueError("Got unsupported runtime parameter type: {}".format(ptype))
+  return pb
+
+
+def set_structural_runtime_parameter_pb(
+    pb: pipeline_pb2.StructuralRuntimeParameter,
+    str_or_params: Sequence[Union[str, Tuple[str, Type[types.Property]],
+                                  Tuple[str, Type[types.Property],
+                                        types.Property]]]
+) -> pipeline_pb2.StructuralRuntimeParameter:
+  """Helper function to fill a StructuralRuntimeParameter proto.
+
+  Args:
+    pb: A StructuralRuntimeParameter proto to be filled in.
+    str_or_params: A list of either a constant string, or args (name, type,
+      default value) to construct a normal runtime parameter. The args will be
+      unpacked and passed to set_runtime_parameter_pb. The parts in a structural
+      runtime parameter will have the same order as the elements in this list.
+
+  Returns:
+    A StructuralRuntimeParameter proto filled with provided values.
+  """
+  for str_or_param in str_or_params:
+    str_or_param_pb = pb.parts.add()
+    if isinstance(str_or_param, str):
+      str_or_param_pb.constant_value = str_or_param
+    else:
+      set_runtime_parameter_pb(str_or_param_pb.runtime_parameter, *str_or_param)
   return pb
 
 
@@ -132,6 +160,26 @@ def has_task_dependency(tfx_pipeline: pipeline.Pipeline):
     if upstream_data_dep_ids != upstream_deps_ids:
       return True
   return False
+
+
+def pipeline_begin_node_type_name(p: pipeline.Pipeline) -> str:
+  """Builds the type name of a Pipeline Begin node."""
+  return f"{p.type}{constants.PIPELINE_BEGIN_NODE_SUFFIX}"
+
+
+def pipeline_end_node_type_name(p: pipeline.Pipeline) -> str:
+  """Builds the type name of a Pipeline End node."""
+  return f"{p.type}{constants.PIPELINE_END_NODE_SUFFIX}"
+
+
+def pipeline_begin_node_id(p: pipeline.Pipeline) -> str:
+  """Builds the node id of a Pipeline Begin node."""
+  return f"{p.id}{constants.PIPELINE_BEGIN_NODE_SUFFIX}"
+
+
+def pipeline_end_node_id(p: pipeline.Pipeline) -> str:
+  """Builds the node id of a Pipeline End node."""
+  return f"{p.id}{constants.PIPELINE_END_NODE_SUFFIX}"
 
 
 def node_context_name(pipeline_context_name: str, node_id: str):

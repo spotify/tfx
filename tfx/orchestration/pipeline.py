@@ -15,9 +15,10 @@
 
 import copy
 import enum
-from typing import Collection, List, Optional, Union, cast
+from typing import Any, Collection, Dict, List, Optional, Union, cast
 import warnings
 
+from tfx import types
 from tfx.dsl.compiler import constants
 from tfx.dsl.components.base import base_node
 from tfx.dsl.components.base import executor_spec
@@ -72,6 +73,17 @@ def add_beam_pipeline_args_to_component(component, beam_pipeline_args):
         component.executor_spec).beam_pipeline_args = beam_pipeline_args + cast(
             executor_spec.BeamExecutorSpec,
             component.executor_spec).beam_pipeline_args
+
+
+class PipelineInputs:
+  """A utility class to help declare input signatures of composable pipelines."""
+
+  def __init__(self, inputs: Optional[Dict[str, types.Channel]] = None):
+    self._inputs = inputs or {}
+
+  @property
+  def inputs(self) -> Dict[str, types.Channel]:
+    return self._inputs
 
 
 class RunOptions:
@@ -192,7 +204,7 @@ class RunOptions:
     self.base_pipeline_run_id = base_pipeline_run_id
 
 
-class Pipeline:
+class Pipeline(base_node.BaseNode):
   """Logical TFX pipeline object.
 
   Pipeline object represents the DAG of TFX components, which can be run using
@@ -214,7 +226,7 @@ class Pipeline:
 
   def __init__(self,
                pipeline_name: str,
-               pipeline_root: Union[str, ph.Placeholder],
+               pipeline_root: Optional[Union[str, ph.Placeholder]] = '',
                metadata_connection_config: Optional[
                    metadata.ConnectionConfigType] = None,
                components: Optional[List[base_node.BaseNode]] = None,
@@ -222,6 +234,9 @@ class Pipeline:
                beam_pipeline_args: Optional[List[str]] = None,
                platform_config: Optional[message.Message] = None,
                execution_mode: Optional[ExecutionMode] = ExecutionMode.SYNC,
+               inputs: Optional[Union[Dict[str, types.Channel],
+                                      PipelineInputs]] = None,
+               outputs: Optional[Dict[str, types.Channel]] = None,
                **kwargs):
     """Initialize pipeline.
 
@@ -230,19 +245,32 @@ class Pipeline:
       pipeline_root: Path to root directory of the pipeline. This will most
         often be just a string. Some orchestrators may have limited support for
         constructing this from a Placeholder, e.g. a RuntimeInfoPlaceholder that
-        refers to fields from the platform config.
+        refers to fields from the platform config. pipeline_root is optional
+        only if the pipeline is composed within another parent pipeline, in
+        which case it will inherit its parent pipeline's root.
       metadata_connection_config: The config to connect to ML metadata.
       components: Optional list of components to construct the pipeline.
       enable_cache: Whether or not cache is enabled for this run.
       beam_pipeline_args: Pipeline arguments for Beam powered Components.
       platform_config: Pipeline level platform config, in proto form.
       execution_mode: The execution mode of the pipeline, can be SYNC or ASYNC.
+      inputs: Optional inputs of a pipeline.
+      outputs: Optional outputs of a pipeline.
       **kwargs: Additional kwargs forwarded as pipeline args.
     """
     if len(pipeline_name) > _MAX_PIPELINE_NAME_LENGTH:
       raise ValueError(
           f'pipeline {pipeline_name} exceeds maximum allowed length: {_MAX_PIPELINE_NAME_LENGTH}.'
       )
+
+    # Initialize pipeline as a node.
+    super().__init__()
+    if isinstance(inputs, PipelineInputs):
+      self._inputs = inputs.inputs
+    else:
+      self._inputs = inputs or {}
+    self._outputs = outputs or {}
+    self._id = pipeline_name
 
     # Once pipeline is finalized, this instance is regarded as immutable and
     # any detectable mutation will raise an error.
@@ -309,6 +337,7 @@ class Pipeline:
 
     deduped_components = set(components)
     node_by_id = {}
+    producer_map = {}
 
     # Fills in producer map.
     for component in deduped_components:
@@ -318,6 +347,14 @@ class Pipeline:
             f'Duplicated node_id {component.id} for component type'
             f'{component.type}.')
       node_by_id[component.id] = component
+      for output_channel in component.outputs.values():
+        if output_channel in producer_map:
+          raise AssertionError(
+              f'{output_channel} is produced more than once by '
+              f'{producer_map[output_channel].id} and {component.id}.')
+        producer_map[output_channel] = component
+
+    pipeline_inputs_set = set(self._inputs.values())
 
     # Connects nodes based on producer map.
     for component in deduped_components:
@@ -327,16 +364,20 @@ class Pipeline:
           channels.append(exec_property.channel)
 
       for input_channel in channels:
-        for node_id in channel_utils.get_dependent_node_ids(input_channel):
-          upstream_node = node_by_id.get(node_id)
+        for individual_input_channel in channel_utils.get_individual_channels(
+            input_channel):
+          upstream_node = producer_map.get(individual_input_channel)
           if upstream_node:
             component.add_upstream_node(upstream_node)
             upstream_node.add_downstream_node(component)
           else:
-            warnings.warn(
-                f'Node {component.id} depends on the output of node {node_id}'
-                f', but {node_id} is not included in the components of '
-                'pipeline. Did you forget to add it?')
+            if individual_input_channel not in pipeline_inputs_set:
+              warnings.warn(
+                  f'Node {component.id} depends on the output of node '
+                  f'{individual_input_channel.producer_component_id}'
+                  f', but {individual_input_channel.producer_component_id} '
+                  'is not included in the components of pipeline. '
+                  'Did you forget to add it?')
 
     layers = topsort.topsorted_layers(
         list(deduped_components),
@@ -371,3 +412,15 @@ class Pipeline:
           'or interleaved pipeline definitions. Make sure each component '
           'belong to exactly one pipeline, and pipeline definitions are '
           'separated.')
+
+  @property
+  def inputs(self) -> Dict[str, types.Channel]:
+    return self._inputs
+
+  @property
+  def outputs(self) -> Dict[str, types.Channel]:
+    return self._outputs
+
+  @property
+  def exec_properties(self) -> Dict[str, Any]:
+    return {}
