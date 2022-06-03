@@ -16,9 +16,10 @@ import os
 from typing import Any, Dict, List
 
 from absl import logging
-from tensorflow_data_validation.api import stats_api
+import tensorflow_data_validation as tfdv
 from tensorflow_data_validation.statistics import stats_options as options
 from tfx import types
+from tfx.components.statistics_gen import stats_artifact_utils
 from tfx.components.util import tfxio_utils
 from tfx.dsl.components.base import base_beam_executor
 from tfx.types import artifact_utils
@@ -130,13 +131,23 @@ class Executor(base_beam_executor.BaseBeamExecutor):
         logging.info('Generating statistics for split %s.', split)
         output_uri = artifact_utils.get_split_uri(
             output_dict[standard_component_specs.STATISTICS_KEY], split)
-        output_path = os.path.join(output_uri, DEFAULT_FILE_NAME)
+        binary_stats_output_path = os.path.join(output_uri, DEFAULT_FILE_NAME)
+
         data = p | 'TFXIORead[%s]' % split >> tfxio.BeamSource()
+        if tfdv.default_sharded_output_supported():
+          sharded_stats_output_prefix = os.path.join(
+              output_uri, stats_artifact_utils.SHARDED_STATS_PREFIX +
+              tfdv.default_sharded_output_suffix())
+          write_transform = tfdv.WriteStatisticsToRecordsAndBinaryFile(
+              binary_proto_path=binary_stats_output_path,
+              records_path_prefix=sharded_stats_output_prefix)
+        else:
+          write_transform = tfdv.WriteStatisticsToBinaryFile(
+              binary_stats_output_path)
         _ = (
             data
             | 'GenerateStatistics[%s]' % split >>
-            stats_api.GenerateStatistics(stats_options)
-            | 'WriteStatsOutput[%s]' % split >>
-            stats_api.WriteStatisticsToBinaryFile(output_path))
+            tfdv.GenerateStatistics(stats_options)
+            | 'WriteStatsOutput[%s]' % split >> write_transform)
         logging.info('Statistics for split %s written to %s.', split,
                      output_uri)
