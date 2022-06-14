@@ -21,14 +21,14 @@ from tfx.dsl.input_resolution import resolver_op
 
 
 class Foo(resolver_op.ResolverOp):
-  foo = resolver_op.ResolverOpProperty(type=int)
+  foo = resolver_op.Property(type=int)
 
   def apply(self, input_dict):
     return input_dict
 
 
 class Bar(resolver_op.ResolverOp):
-  bar = resolver_op.ResolverOpProperty(type=str, default='bar')
+  bar = resolver_op.Property(type=str, default='bar')
 
   def apply(self, input_dict):
     return input_dict
@@ -36,8 +36,8 @@ class Bar(resolver_op.ResolverOp):
 
 class Repeat(
     resolver_op.ResolverOp,
-    return_data_type=resolver_op.DataTypes.ARTIFACT_MULTIMAP_LIST):
-  n = resolver_op.ResolverOpProperty(type=int)
+    return_data_type=resolver_op.DataType.ARTIFACT_MULTIMAP_LIST):
+  n = resolver_op.Property(type=int)
 
   def apply(self, input_dict):
     return [copy.deepcopy(input_dict) for _ in range(self.n)]
@@ -45,7 +45,7 @@ class Repeat(
 
 class TakeLast(
     resolver_op.ResolverOp,
-    arg_data_types=(resolver_op.DataTypes.ARTIFACT_MULTIMAP_LIST,)):
+    arg_data_types=(resolver_op.DataType.ARTIFACT_MULTIMAP_LIST,)):
 
   def apply(self, input_dicts):
     return input_dicts[-1]
@@ -56,7 +56,7 @@ class ResolverOpTest(tf.test.TestCase):
   def testDefineOp_PropertyDefaultViolatesType(self):
     with self.assertRaises(TypeError):
       class BadProperty(resolver_op.ResolverOp):  # pylint: disable=unused-variable
-        str_prop = resolver_op.ResolverOpProperty(type=str, default=42)
+        str_prop = resolver_op.Property(type=str, default=42)
 
   def testOpCall_ReturnsOpNode(self):
     result = Foo(resolver_op.OpNode.INPUT_NODE, foo=42)
@@ -86,7 +86,7 @@ class ResolverOpTest(tf.test.TestCase):
   def testOpCreate_CannotTakeMultipleArgs(self):
     foo1 = Foo(resolver_op.OpNode.INPUT_NODE, foo=1)
     foo2 = Foo(resolver_op.OpNode.INPUT_NODE, foo=2)
-    with self.assertRaises(TypeError):
+    with self.assertRaises(ValueError):
       Bar(foo1, foo2)
 
   def testOpCreate_InvalidArg(self):
@@ -133,7 +133,7 @@ class ResolverOpTest(tf.test.TestCase):
   def testOpProperty_ComplexTypeCheck(self):
 
     class CustomOp(resolver_op.ResolverOp):
-      optional_mapping = resolver_op.ResolverOpProperty(
+      optional_mapping = resolver_op.Property(
           type=Optional[Mapping[str, str]], default=None)
 
       def apply(self, input_dict):
@@ -155,9 +155,9 @@ class OpNodeTest(tf.test.TestCase):
   def testOpNode_Repr(self):
     input_node = resolver_op.OpNode.INPUT_NODE
     foo = resolver_op.OpNode(
-        op_type=Foo, arg=input_node, kwargs={'foo': 42})
+        op_type=Foo, args=[input_node], kwargs={'foo': 42})
     bar = resolver_op.OpNode(
-        op_type=Bar, arg=foo, kwargs={'bar': 'z'})
+        op_type=Bar, args=[foo], kwargs={'bar': 'z'})
 
     self.assertEqual(repr(bar), "Bar(Foo(INPUT_NODE, foo=42), bar='z')")
 
