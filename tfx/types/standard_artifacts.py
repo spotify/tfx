@@ -75,6 +75,27 @@ class _TfxArtifact(Artifact):
 
 
 class Examples(_TfxArtifact):
+  """Artifact that contains the training data.
+
+  Training data should be brought in to the TFX pipeline using components
+  like ExampleGen. Data in Examples artifact is split and stored separately.
+  The file and payload format can be specified as optional custom properties.
+
+  * File structure:
+     - `{uri}/`
+        - `Split-{split_name1}/`: Files for split
+           - All direct children files are recognized as the data.
+           - File format and payload format are determined by custom properties.
+        - `Split-{split_name2}/`: Another split...
+
+  * Commonly used custom properties of the Examples artifact:
+    - `file_format`: a string that represents the file format. See
+      tfx/components/util/tfxio_utils.py:make_tfxio for
+      available values.
+    - `payload_format`: int (enum) value of the data payload format.
+      See tfx/proto/example_gen.proto:PayloadFormat for available formats.
+    - `input_fingerprint`: a string that can identifie the data.
+  """
   TYPE_NAME = 'Examples'
   TYPE_ANNOTATION = Dataset
   PROPERTIES = {
@@ -115,6 +136,22 @@ class InfraBlessing(_TfxArtifact):
 
 
 class Model(_TfxArtifact):
+  """Artifact that contains the actual persisted model.
+
+  Training components stores the trained model like a saved model in this
+  artifact. A Model artifact can contain multiple models.
+
+  * File structure:
+     - `{uri}/`
+        - `Format-Serving/`: Model exported for serving.
+           - `saved_model.pb`
+           - Other actual model files.
+        - `Format-TFMA/`: Model exported for evaluation.
+           - `saved_model.pb`
+           - Other actual model files.
+
+  * Commonly used custom properties of the Modle artifact:
+  """
   TYPE_NAME = 'Model'
   TYPE_ANNOTATION = SystemModel
 
