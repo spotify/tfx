@@ -21,13 +21,18 @@ Internal use only. No backwards compatibility guarantees.
 
 import enum
 import inspect
+import sys
 import types
 from typing import Any, Dict, Optional, Tuple, Type, Union
-
 from tfx.dsl.component.experimental import annotations
 from tfx.dsl.component.experimental import json_compat
 from tfx.types import artifact
 from tfx.types import standard_artifacts
+
+if sys.version_info >= (3, 8):
+  from typing import _TypedDictMeta
+else:
+  from typing_extensions import _TypedDictMeta
 
 try:
   import apache_beam as beam  # pytype: disable=import-error  # pylint: disable=g-import-not-at-top
@@ -60,6 +65,18 @@ _PRIMITIVE_TO_ARTIFACT = {
 _OPTIONAL_PRIMITIVE_MAP = dict((Optional[t], t) for t in _PRIMITIVE_TO_ARTIFACT)
 
 
+def _get_return_type_annotations(typehints: Dict[str, Any]) -> Optional[Dict]:
+  """Returns annotations of expected return types."""
+  return_annotations = typehints.get('return')
+  if (isinstance(return_annotations, _TypedDictMeta) and
+          getattr(return_annotations, "__annotations__")):
+    return return_annotations.__annotations__
+  elif isinstance(return_annotations, Dict):
+    return return_annotations
+  else:
+    return None
+
+
 def _validate_signature(
     func: types.FunctionType,
     argspec: inspect.FullArgSpec,  # pytype: disable=module-attr
@@ -83,8 +100,9 @@ def _validate_signature(
                        subject_message)
 
   # Validate return type hints.
-  if isinstance(typehints.get('return', None), annotations.OutputDict):
-    for arg, arg_typehint in typehints['return'].kwargs.items():
+  return_annotations = _get_return_type_annotations(typehints)
+  if isinstance(return_annotations, Dict):
+    for arg, arg_typehint in return_annotations.items():
       if (isinstance(arg_typehint, annotations.OutputArtifact) or
           (inspect.isclass(arg_typehint) and
            issubclass(arg_typehint, artifact.Artifact))):
@@ -93,13 +111,15 @@ def _validate_signature(
              'be declared as function parameters annotated with type hint '
              '`tfx.types.annotations.OutputArtifact[T]` where T is a '
              'subclass of `tfx.types.Artifact`. They should not be declared '
-             'as part of the return value `OutputDict` type hint.') % func)
+             'as part of the return value `OutputDict` or '
+             '`TypedDict` type hint.') % func)
   elif 'return' not in typehints or typehints['return'] in (None, type(None)):
     pass
   else:
     raise ValueError(
-        ('%s must have either an OutputDict instance or `None` as its return '
-         'value typehint.') % subject_message)
+        ('%s must have either an OutputDict instance, '
+         'typing.TypedDict instance '
+         'or `None` as its return value typehint.') % subject_message)
 
 
 def _parse_signature(
@@ -223,8 +243,10 @@ def _parse_signature(
           'Unknown type hint annotation for argument %r on function %r' %
           (arg, func))
 
-  if 'return' in typehints and typehints['return'] not in (None, type(None)):
-    for arg, arg_typehint in typehints['return'].kwargs.items():
+  return_annotations = _get_return_type_annotations(typehints)
+  if ('return' in typehints and typehints['return'] not in (None, type(None))
+          and isinstance(return_annotations, Dict)):
+    for arg, arg_typehint in return_annotations.items():
       if arg_typehint in _OPTIONAL_PRIMITIVE_MAP:
         unwrapped_typehint = _OPTIONAL_PRIMITIVE_MAP[arg_typehint]
         outputs[arg] = _PRIMITIVE_TO_ARTIFACT[unwrapped_typehint]
